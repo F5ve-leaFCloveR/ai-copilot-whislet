@@ -1,0 +1,48 @@
+{
+  "vad": {
+    "provider": "snakers4/silero-vad",
+    "release": "v6.2",
+    "commit": "be95df9152c0d7618fa1edfeb296fc3dae32376f",
+    "path": "models/silero_vad.onnx",
+    "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+    "git_blob_sha": "80c5592ef1f4c9ede3e357bbd02eb863358a6a9d",
+    "bytes": 2327524,
+    "source": "https://raw.githubusercontent.com/snakers4/silero-vad/be95df9152c0d7618fa1edfeb296fc3dae32376f/src/silero_vad/data/silero_vad.onnx",
+    "origin": "existing cache"
+  },
+  "asr": {
+    "model_id": "moona3k/mlx-qwen3-asr-0.6b-8bit",
+    "revision": "83ce2a8ef9a382d2ba2209aab383bc51fff366f5",
+    "format": "MLX",
+    "quantization": "8bit",
+    "files": {
+      "config.json": {
+        "sha256": "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c",
+        "bytes": 6193
+      },
+      "quantization_config.json": {
+        "sha256": "964fe0bcf1c9cb41a0a66616e64c2bfcf93bd5581f3abd869b0e72d3dbc66154",
+        "bytes": 35
+      },
+      "tokenizer_config.json": {
+        "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+        "bytes": 12487
+      },
+      "vocab.json": {
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        "bytes": 2776833
+      },
+      "weights.safetensors": {
+        "sha256": "940d73134ef51218d923cce36a58f23e2286b16313a35e3b273937041069f844",
+        "bytes": 835619431
+      }
+    }
+  },
+  "runtime": {
+    "mlx-qwen3-asr": "0.4.4",
+    "mlx": "0.32.3",
+    "numpy": "2.4.6",
+    "onnxruntime": "1.24.4",
+    "huggingface-hub": "2.2.0"
+  }
+}

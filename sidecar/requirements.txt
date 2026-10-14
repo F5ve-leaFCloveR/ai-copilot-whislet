@@ -1,0 +1,5 @@
+mlx-qwen3-asr==0.4.4
+mlx==0.32.3
+numpy==2.4.6
+onnxruntime==1.24.4
+huggingface-hub==2.2.0
