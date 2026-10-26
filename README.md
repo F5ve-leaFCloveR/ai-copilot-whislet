@@ -16,6 +16,7 @@ Recorded from the native interface with a fictional demo conversation.
 
 - Listen to both system audio and your microphone, with local Qwen3-ASR recognition on Apple Silicon.
 - Request a suggestion yourself or let automatic question detection prompt one.
+- Translate the latest speaker's words into Russian on demand, alongside your suggested reply.
 - Keep separate context profiles for different conversations.
 - Include screen context when needed; read compact Markdown and highlighted code.
 - Use your own OpenAI-compatible API key, Base URL and model ID.
@@ -66,9 +67,12 @@ New profiles have empty context. Add project notes, meeting goals or other backg
 
 **AI answer** uses the latest recognized speech from either source. An unfinished utterance waits up to two seconds for final text, then uses the latest partial. **Auto** reacts to completed questions from system audio. Hide continues listening; pause stops capture. Ending a session clears the temporary conversation.
 
+**Translate** uses the latest recognized system-audio utterance and shows a separate Russian translation. Use the toolbar icon, the answer panel's **Перевод** button or Control + Option + T. Translation runs independently of reply generation and sends only the source text to your configured model, without profile notes, conversation history or screenshots.
+
 | Shortcut | Action |
 | --- | --- |
 | Control + Option + H | Answer / show answer panel |
+| Control + Option + T | Translate the latest speaker's words into Russian |
 | Control + Option + S | Answer with screenshot |
 | Control + Option + X | Hide windows |
 | Control + Option + P | Pause / resume |

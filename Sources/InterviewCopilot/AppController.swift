@@ -17,11 +17,14 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var socket: ASRSocket?
     private var capture: AudioCapture?
     private var client: OpenAICompatibleClient?
+    private var translationClient: OpenAICompatibleClient?
     private var apiConnection: APIConnection?
     private var pricedCosts: [UUID: UsageCost] = [:]
     private var startTask: Task<Void, Never>?
     private var requestTask: Task<Void, Never>?
     private var manualTask: Task<Void, Never>?
+    private var translationTask: Task<Void, Never>?
+    private var pendingTranslationQuestionID: UUID?
     private var pendingManualQuestionID: UUID?
     private var healthTask: Task<Void, Never>?
     private var privacyTask: Task<Void, Never>?
@@ -50,6 +53,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var timings: [UUID: TimingRecord] = [:]
     private var costEntries: [CostEntry] = []
     private var observerTokens: [NSObjectProtocol] = []
+    private static let translationPreviewQuestion = "Could you describe your approach to evaluating an AI assistant?"
+    private static let translationPreviewText = "Можете описать ваш подход к оценке ИИ-помощника?"
     private let demo = CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--validate-native") || CommandLine.arguments.contains("--export-ui-preview")
     private let keyOverride: String?
     private var ephemeralReplay: Bool { keyOverride != nil }
@@ -116,6 +121,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
         }
         traceLayout()
+        if demo, CommandLine.arguments.contains("--translation-preview") { prepareTranslationPreview() }
         if CommandLine.arguments.contains("--validate-native") || CommandLine.arguments.contains("--export-ui-preview") { Task { await nativeValidation() } }
         if let index = CommandLine.arguments.firstIndex(of: "--replay"), CommandLine.arguments.indices.contains(index + 1) {
             replay = ReplayRunner(manifestPath: CommandLine.arguments[index + 1], controller: self)
@@ -123,6 +129,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
     func applicationWillTerminate(_ notification: Notification) {
+        cancelTranslation()
         startTask?.cancel(); requestTask?.cancel(); manualTask?.cancel(); healthTask?.cancel(); socket?.close(); asr.stop()
         observerTokens.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0); NotificationCenter.default.removeObserver($0) }
         if !demo, !ephemeralReplay { saved.ui = model.settings; try? SettingsStore.save(saved) }
@@ -137,6 +144,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         case .startStop:
             if running || preparing { stop() } else { start() }
         case .manual(let input): manual(input)
+        case .translateQuestion: translateQuestion()
+        case .dismissTranslation: cancelTranslation(); render()
         case .screenshot: manual(nil, screenshot: true)
         case .pause: pause()
         case .hide: state.hide(); ui.hideAll()
@@ -204,6 +213,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
     private func profileChanged(from old: UUID?, to new: UUID) {
         guard old != new else { return }
+        cancelTranslation()
         cancelGeneration(); state.resetConversation(); questionGate.reset()
         cardProfiles.removeAll(); cardModels.removeAll(); imageCards.removeAll()
         latestSystem = nil; finalUtterances.removeAll(); displayTranscript.removeAll(); transcriptOrder.removeAll(); requestedUtteranceIDs.removeAll()
@@ -223,6 +233,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         var current = audioSnapshot.filter { $0.endedAt >= captureResetAt }
         if let latestSystem, latestSystem.endedAt >= captureResetAt { current.append(latestSystem) }
         return ManualQuestionSelector.select(from: current)
+    }
+    private var translationQuestion: Utterance? {
+        Self.latestInterviewerQuestion(from: audioSnapshot, latestSystem: latestSystem, after: captureResetAt)
+    }
+    nonisolated static func latestInterviewerQuestion(from utterances: [Utterance], latestSystem: Utterance?, after cutoff: Double) -> Utterance? {
+        let current = utterances + (latestSystem.map { [$0] } ?? [])
+        return ManualQuestionSelector.select(from: current.filter { $0.source == .system && $0.endedAt >= cutoff })?.question
     }
     private func start() {
         if demo { running = true; state.resume(); presentation.phase = .listening; render(); ui.showToolbar(); return }
@@ -251,6 +268,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 model.settings.adaptDefaultModel(to: connection)
                 let client = OpenAICompatibleClient(keyProvider: { key }, connection: connection)
                 self.client = client
+                translationClient = OpenAICompatibleClient(keyProvider: { key }, connection: connection)
                 budget = BudgetLedger(limitRub: replay == nil ? 50 : 10); pricedCosts.removeAll()
                 if connection.supportsBalance {
                     let balance = try await client.balance()
@@ -330,7 +348,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         if displayTranscript[utterance.id] == nil { transcriptOrder.append(utterance.id) }
         displayTranscript[utterance.id] = utterance
         if transcriptOrder.count > 200 { displayTranscript.removeValue(forKey: transcriptOrder.removeFirst()) }
-        if utterance.source == .system { latestSystem = utterance }
+        if utterance.source == .system {
+            latestSystem = utterance
+            if let current = translationQuestion, presentation.translation.question != nil {
+                if pendingTranslationQuestionID == current.id { presentation.translation.updateQuestion(current) }
+                else if !presentation.translation.matches(current) { cancelTranslation() }
+            }
+        }
         if utterance.isFinal {
             finalUtterances.append(utterance); if finalUtterances.count > 200 { finalUtterances.removeFirst() }
             state.appendTranscript(utterance)
@@ -339,6 +363,94 @@ final class AppController: NSObject, NSApplicationDelegate {
             if accepted, model.settings.auto, pendingManualQuestionID != utterance.id, !requestedUtteranceIDs.contains(utterance.id) { generate(utterance) }
         }
         render()
+    }
+    private func translateQuestion() {
+        guard running, !state.isPaused else { localMessage("Начните сессию или снимите паузу"); return }
+        guard demo || canShow(), !checkingPrivacy, privacyTask == nil else { return }
+        guard let question = translationQuestion else { showTranslationError("Пока нет реплики собеседника для перевода"); return }
+        if presentation.translation.matches(question), [.streaming, .ready].contains(presentation.translation.status) {
+            revealTranslation(); return
+        }
+        if demo {
+            cancelTranslation()
+            let id = presentation.translation.begin(question)
+            presentation.translation.apply(.text(id, question.text == Self.translationPreviewQuestion ? Self.translationPreviewText : question.text))
+            presentation.translation.apply(.done(id, costRub: 0, finishReason: "stop"))
+            revealTranslation(); return
+        }
+        guard let translationClient, let connection = apiConnection else { showTranslationError("Сеть не подготовлена. Восстановите сессию"); return }
+        cancelTranslation()
+        let id = presentation.translation.begin(question)
+        let token = epoch, profileID = model.settings.activeProfile.id
+        let preset = ModelPreset(model: model.settings.model, reasoningEffort: ModelPreset.defaultReasoningEffort(for: model.settings.model), providerSort: "latency", maxTokens: 1024, structuredShort: false)
+        pendingTranslationQuestionID = question.isFinal ? nil : question.id
+        revealTranslation()
+        translationTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if token == epoch, presentation.translation.requestID == id { translationTask = nil; pendingTranslationQuestionID = nil }
+            }
+            do {
+                let settled = question.isFinal ? question : try await Self.settledManualQuestion(question) { self.audioSnapshot }
+                try Task.checkCancellation()
+                guard token == epoch, running, !state.isPaused, profileID == model.settings.activeProfile.id,
+                      presentation.translation.requestID == id, translationQuestion?.id == settled.id else { return }
+                presentation.translation.updateQuestion(settled); pendingTranslationQuestionID = nil
+                if connection.supportsBalance, completedSinceBalance >= 5 || ProcessInfo.processInfo.systemUptime - lastBalanceAt >= 300 {
+                    let balance = try await translationClient.balance()
+                    try Task.checkCancellation()
+                    guard token == epoch, presentation.translation.requestID == id else { return }
+                    budget.observeKeyRemaining(balance.availableRub); lastBalanceAt = ProcessInfo.processInfo.systemUptime; completedSinceBalance = 0
+                }
+                guard token == epoch, running, !state.isPaused, profileID == model.settings.activeProfile.id,
+                      presentation.translation.requestID == id, canShow(), !checkingPrivacy, privacyTask == nil else { return }
+                if connection.supportsBalance { try budget.authorize(id: id, reserveRub: 1) }
+                costEntries.append(CostEntry(id: id, reservedRub: connection.supportsBalance ? "1" : "0", actualRub: nil, date: Date())); saveCostJournal()
+                let request = HintRequest(id: id, question: settled, preset: preset, connection: connection, purpose: .questionTranslation)
+                for try await event in await translationClient.generate(request) {
+                    guard token == epoch else { return }
+                    if case .usage(let eventID, let cost) = event {
+                        budget.settle(id: eventID, actualRub: cost)
+                        if let index = costEntries.firstIndex(where: { $0.id == eventID }) { costEntries[index].actualRub = NSDecimalNumber(decimal: cost).stringValue }; saveCostJournal()
+                    }
+                    if case .pricedUsage(let eventID, let cost) = event {
+                        pricedCosts[eventID] = cost
+                        if let index = costEntries.firstIndex(where: { $0.id == eventID }) {
+                            costEntries[index].actualAmount = NSDecimalNumber(decimal: cost.amount).stringValue
+                            costEntries[index].currency = cost.currency
+                        }
+                        saveCostJournal()
+                    }
+                    if case .done(let eventID, let cost, _) = event {
+                        if let cost {
+                            budget.settle(id: eventID, actualRub: cost)
+                            if let index = costEntries.firstIndex(where: { $0.id == eventID }) { costEntries[index].actualRub = NSDecimalNumber(decimal: cost).stringValue }; saveCostJournal()
+                        }
+                        completedSinceBalance += 1
+                    }
+                    guard profileID == model.settings.activeProfile.id, presentation.translation.requestID == id, !Task.isCancelled else { continue }
+                    presentation.translation.apply(event); render()
+                }
+                guard token == epoch, profileID == model.settings.activeProfile.id, presentation.translation.requestID == id, !Task.isCancelled else { return }
+                presentation.translation.apply(.done(id, costRub: nil, finishReason: "incomplete")); render()
+            } catch is CancellationError { }
+            catch {
+                guard token == epoch, profileID == model.settings.activeProfile.id, presentation.translation.requestID == id else { return }
+                presentation.translation.apply(.failed(id, error.localizedDescription)); render()
+            }
+        }
+    }
+    private func revealTranslation() {
+        state.show(); presentation.answerRevealRevision &+= 1; render(); ui.showToolbar(); ui.showAnswer()
+    }
+    private func showTranslationError(_ message: String) {
+        cancelTranslation(); presentation.translation.fail(message); revealTranslation()
+    }
+    private func cancelTranslation() {
+        let id = presentation.translation.requestID, client = translationClient
+        translationTask?.cancel(); translationTask = nil; pendingTranslationQuestionID = nil
+        presentation.translation.clear()
+        if let id, let client { Task { await client.cancel(id) } }
     }
     private func manual(_ text: String?, screenshot: Bool = false) {
         manualTask?.cancel(); manualTask = nil; pendingManualQuestionID = nil
@@ -485,12 +597,14 @@ final class AppController: NSObject, NSApplicationDelegate {
                 catch { guard token == epoch else { return }; captureFailed(error.localizedDescription) }
             }
         } else {
+            cancelTranslation()
             cancelGeneration(); state.pause(); captureResetAt = ProcessInfo.processInfo.systemUptime; socket?.reset(); latestSystem = nil
             let token = epoch, old = capture
             captureTransitionTask = Task { await old?.stop(); if token == epoch { captureTransitionTask = nil } }; presentation.phase = .paused; presentation.audioStatus = "Захват на паузе"; render()
         }
     }
     private func stop() {
+        cancelTranslation(); translationClient = nil
         epoch = UUID(); captureTransitionTask?.cancel(); captureTransitionTask = nil; privacyTask?.cancel(); privacyTask = nil; privacyOperationID = nil; startTask?.cancel(); startTask = nil; cancelGeneration(); healthTask?.cancel(); healthTask = nil
         running = false; preparing = false; ready = false
         socket?.close(); socket = nil; asr.stop()
@@ -507,6 +621,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
     private func captureFailed(_ text: String) {
         guard running || preparing else { return }
+        cancelTranslation(); translationClient = nil
         epoch = UUID(); captureTransitionTask?.cancel(); captureTransitionTask = nil; startTask?.cancel(); startTask = nil
         cancelGeneration(); state.pause(); ready = false; running = false; preparing = false
         socket?.close(); socket = nil; asr.stop(); healthTask?.cancel()
@@ -644,6 +759,17 @@ final class AppController: NSObject, NSApplicationDelegate {
         guard demo, CommandLine.arguments.contains("--trace-layout"), let ui else { return }
         let values: [String: Double] = ["toolbarX": ui.toolbar.frame.minX, "toolbarY": ui.toolbar.frame.minY, "answerX": ui.answer.frame.minX, "answerY": ui.answer.frame.minY, "answerWidth": ui.answer.frame.width, "answerHeight": ui.answer.frame.height, "gap": ui.toolbar.frame.minY - ui.answer.frame.maxY, "centerDelta": ui.toolbar.frame.midX - ui.answer.frame.midX]
         if let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]) { print("UI layout: " + String(decoding: data, as: UTF8.self)) }
+    }
+    private func prepareTranslationPreview() {
+        running = true; state.resume(); presentation.phase = .listening
+        let question = Utterance(source: .system, text: Self.translationPreviewQuestion, endedAt: ProcessInfo.processInfo.systemUptime, isFinal: true)
+        latestSystem = question
+        let id = state.begin(question: question)
+        state.apply(.text(id, "I compare the answers with reference questions and check correctness, grounding and response time."))
+        state.apply(.done(id, costRub: 0, finishReason: "stop"))
+        cardProfiles[id] = model.settings.activeProfile.id
+        presentation.answerRevealRevision &+= 1
+        registry.closeAuxiliary(); render(); ui.showToolbar(); ui.showAnswer()
     }
     private func appError(_ text: String) -> NSError { NSError(domain: "InterviewCopilot", code: 1, userInfo: [NSLocalizedDescriptionKey: text]) }
 
