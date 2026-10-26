@@ -85,7 +85,7 @@ final class InterviewUI: NSObject, NSWindowDelegate {
         self.model = model
         self.registry = registry
         let bounds = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let bar = NSRect(x: bounds.midX - 202.5, y: bounds.maxY - 80, width: 405, height: 40)
+        let bar = NSRect(x: bounds.midX - 219, y: bounds.maxY - 80, width: 438, height: 40)
         let reply = NSRect(x: bar.midX - 340, y: bar.minY - 472, width: 680, height: 460)
         toolbar = ToolbarPanel(registry: registry, frame: bar)
         answer = AnswerPanel(registry: registry, frame: reply)

@@ -6,10 +6,11 @@ final class HotkeyRegistry {
     var onAction: ((UIAction) -> Void)?
     private var handler: EventHandlerRef?
     private var references: [EventHotKeyRef] = []
-    private let actions: [UInt32: UIAction] = [1: .manual(nil), 2: .screenshot, 3: .hide, 4: .pause, 5: .previous, 6: .latest]
+    private let actions: [UInt32: UIAction] = [1: .manual(nil), 2: .screenshot, 3: .hide, 4: .pause, 5: .previous, 6: .latest, 7: .translateQuestion]
 
     init(onAction: ((UIAction) -> Void)? = nil) { self.onAction = onAction }
     func register() -> String? { let errors = registerDefaults(); return errors.isEmpty ? nil : errors.joined(separator: "\n") }
+    func performHotkey(_ id: UInt32) { if let action = actions[id] { onAction?(action) } }
 
     func registerDefaults(overrides: [String: String]? = nil) -> [String] {
         unregister()
@@ -46,7 +47,7 @@ final class HotkeyRegistry {
             let id = key.id
             MainActor.assumeIsolated {
                 let owner = Unmanaged<HotkeyRegistry>.fromOpaque(data).takeUnretainedValue()
-                if let action = owner.actions[id] { owner.onAction?(action) }
+                owner.performHotkey(id)
             }
             return noErr
         }, 1, &event, pointer, &handler)

@@ -33,7 +33,8 @@ enum UIHotkeys {
         UIHotkeyCommand(id: "hide", title: "Скрыть все окна", defaultLetter: "X"),
         UIHotkeyCommand(id: "pause", title: "Пауза / продолжить", defaultLetter: "P"),
         UIHotkeyCommand(id: "previous", title: "Предыдущий ответ", defaultLetter: "B"),
-        UIHotkeyCommand(id: "latest", title: "Последний ответ", defaultLetter: "N")
+        UIHotkeyCommand(id: "latest", title: "Последний ответ", defaultLetter: "N"),
+        UIHotkeyCommand(id: "translate", title: "Перевести вопрос", defaultLetter: "T")
     ]
 }
 
@@ -86,12 +87,49 @@ struct UIHistoryItem: Identifiable, Equatable {
     var hasScreenshot = false
 }
 
+struct UIQuestionTranslation: Equatable {
+    private(set) var question: Utterance?
+    private(set) var requestID: UUID?
+    private(set) var text = ""
+    private(set) var status: UIHintStatus = .waiting
+    private(set) var error = ""
+
+    mutating func begin(_ question: Utterance) -> UUID {
+        let id = UUID()
+        self = Self(question: question, requestID: id, status: .streaming)
+        return id
+    }
+
+    func matches(_ question: Utterance) -> Bool {
+        self.question?.id == question.id && self.question?.text == question.text
+    }
+
+    mutating func updateQuestion(_ question: Utterance) {
+        guard self.question?.id == question.id else { return }
+        self.question = question
+    }
+
+    mutating func apply(_ event: GenerationEvent) {
+        guard event.id == requestID, status == .streaming else { return }
+        switch event {
+        case .text(_, let delta): text += delta
+        case .done(_, _, let reason): status = reason == "stop" && !text.isEmpty ? .ready : .incomplete
+        case .failed(_, let message): status = .failed; error = message
+        default: break
+        }
+    }
+
+    mutating func clear() { self = Self() }
+    mutating func fail(_ message: String) { self = Self(status: .failed, error: message) }
+}
+
 struct UIPresentation: Equatable {
     var phase: UIPhase = .stopped
     var question = ""
     var text = ""
     var followups: [String] = []
     var hintStatus: UIHintStatus = .waiting
+    var translation = UIQuestionTranslation()
     var selectedCardID: UUID?
     var answerRevealRevision = 0
     var selectedIndex = 0
@@ -120,6 +158,7 @@ struct UIPresentation: Equatable {
 
 enum UIAction {
     case startStop, manual(String?), screenshot, pause, hide, previous, latest
+    case translateQuestion, dismissTranslation
     case settings, context, history, saveSettings(UISettings), recover
     case setAuto(Bool), setModel(String), selectHistory(UUID), pinHistory
     case checkPrivacy, confirmPrivacy, saveKey(String), windowLayout(UIWindowLayout), moreDetail, quit, cancelHint

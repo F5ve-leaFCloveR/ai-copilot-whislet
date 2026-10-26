@@ -93,6 +93,8 @@ struct ToolbarSurface: View {
             HStack(spacing: 3) { Image(systemName: "waveform").font(.system(size: 13)); Text("\(Int(model.presentation.systemLevel * 100))%").font(.system(size: 9)).monospacedDigit() }.foregroundStyle(model.isRunning ? UITheme.accentText : UITheme.muted).frame(width: 42)
             IconControl(symbol: model.presentation.phase == .paused ? "mic.slash" : "mic", label: model.presentation.phase == .paused ? "Продолжить" : "Пауза") { model.send(.pause) }.frame(width: 19)
             Button { model.send(.manual(nil)) } label: { Text("Ответ AI").font(.system(size: 12, weight: .medium)) }.buttonStyle(FlatButtonStyle())
+            IconControl(symbol: "character.bubble", label: "Перевести вопрос") { model.send(.translateQuestion) }
+                .help("Перевести вопрос · \(model.settings.hotkeyShortcut("translate"))")
             Button { model.send(.screenshot) } label: { Label("Скриншот", systemImage: "rectangle.dashed").font(.system(size: 12, weight: .medium)) }.buttonStyle(FlatButtonStyle())
             IconControl(symbol: "line.3.horizontal", label: "Открыть меню", action: menu).frame(width: 23)
         }.padding(.horizontal, 8).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -119,6 +121,8 @@ struct AnswerSurface: View {
                     }.buttonStyle(.plain)
                 }
                 NativeDragRegion().frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityLabel("Переместить панель и ответ")
+                Button("Перевод") { model.send(.translateQuestion) }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(UITheme.accentText)
+                    .help("Перевести вопрос · \(model.settings.hotkeyShortcut("translate"))")
                 if !model.presentation.question.isEmpty {
                     IconControl(symbol: questionExpanded ? "text.bubble.fill" : "text.bubble", label: questionExpanded ? "Скрыть вопрос" : "Показать вопрос") { questionExpanded.toggle() }
                         .help(questionExpanded ? "Скрыть вопрос" : "Показать вопрос")
@@ -175,6 +179,30 @@ struct AnswerSurface: View {
 
     @ViewBuilder private var chat: some View {
         let value = model.presentation
+        if value.translation.question != nil || !value.translation.error.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Label("Перевод последней реплики", systemImage: "character.bubble").font(.system(size: 11, weight: .medium)).foregroundStyle(UITheme.accentText)
+                    Spacer(minLength: 0)
+                    if value.translation.status == .streaming { ProgressView().controlSize(.mini) }
+                    IconControl(symbol: "xmark", label: "Скрыть перевод") { model.send(.dismissTranslation) }
+                }
+                if let question = value.translation.question {
+                    Text(question.text).font(.system(size: model.settings.fontSize - 2)).foregroundStyle(UITheme.muted).lineLimit(2)
+                }
+                if !value.translation.text.isEmpty {
+                    NativeHintText(text: value.translation.text, fontSize: model.settings.fontSize, cardID: nil) { _, _ in }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if value.translation.status == .streaming {
+                    Text("Перевожу вопрос…").font(.system(size: model.settings.fontSize)).foregroundStyle(UITheme.muted)
+                }
+                if !value.translation.error.isEmpty {
+                    Text(value.translation.error).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true).foregroundStyle(UITheme.muted)
+                } else if value.translation.status == .incomplete {
+                    Text("Перевод не завершён. Нажмите «Перевод», чтобы повторить.").font(.system(size: 11)).foregroundStyle(UITheme.muted)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(12).background(UITheme.accent.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 9))
+        }
         if questionExpanded, !value.question.isEmpty {
             Text(value.question).font(.system(size: model.settings.fontSize - 1)).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(UITheme.muted)
@@ -212,7 +240,7 @@ struct AnswerSurface: View {
                 }
             }
         } else {
-            Text(model.isGenerating ? "Готовлю ответ…" : value.phase == .paused ? "Прослушивание на паузе" : value.phase == .stopped ? "Начните сессию" : "Слушаю собеседника. Ответ появится после вопроса.")
+            Text(model.isGenerating ? "Готовлю ответ…" : value.phase == .paused ? "Прослушивание на паузе" : value.phase == .stopped ? "Начните сессию" : value.translation.question != nil ? "Для подсказки нажмите «Ответ AI»." : "Слушаю собеседника. Ответ появится после вопроса.")
                 .font(.system(size: model.settings.fontSize)).foregroundStyle(UITheme.muted).padding(.top, 6)
         }
     }

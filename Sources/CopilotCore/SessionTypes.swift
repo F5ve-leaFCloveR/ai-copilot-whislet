@@ -2,6 +2,7 @@ import Foundation
 
 public enum AudioSource: String, Codable, Sendable { case system, microphone }
 public enum ConversationMode: String, Codable, Sendable { case interview, work, recruiterInterview }
+public enum HintRequestPurpose: Sendable { case answer, questionTranslation }
 
 public struct Utterance: Codable, Equatable, Sendable {
     public let id: UUID
@@ -60,10 +61,11 @@ public struct HintRequest: Sendable {
     public let mode: ConversationMode
     public let projectContext: String
     public let connection: APIConnection
-    public var usesStructuredOutput: Bool { preset.structuredShort && mode != .recruiterInterview }
-    public init(id: UUID = UUID(), question: Utterance, context: [Utterance] = [], profile: String = "", preset: ModelPreset = .short, jpeg: Data? = nil, previousHint: HintCard? = nil, mode: ConversationMode = .interview, projectContext: String = "", connection: APIConnection = .legacy) {
+    public let purpose: HintRequestPurpose
+    public var usesStructuredOutput: Bool { purpose == .answer && preset.structuredShort && mode != .recruiterInterview }
+    public init(id: UUID = UUID(), question: Utterance, context: [Utterance] = [], profile: String = "", preset: ModelPreset = .short, jpeg: Data? = nil, previousHint: HintCard? = nil, mode: ConversationMode = .interview, projectContext: String = "", connection: APIConnection = .legacy, purpose: HintRequestPurpose = .answer) {
         self.id = id; self.question = question; self.context = context; self.profile = profile; self.preset = preset; self.jpeg = jpeg; self.previousHint = previousHint; self.mode = mode; self.projectContext = projectContext
-        self.connection = connection
+        self.connection = connection; self.purpose = purpose
     }
     public static func clarificationContext(for text: String?, screenshot: Bool = false, selectedCard: HintCard?) -> HintCard? {
         guard !screenshot, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
